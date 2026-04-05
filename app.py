@@ -22,8 +22,20 @@ def get_calendar_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-            creds = flow.run_local_server(port=0)
+            client_config = {
+    "installed": {
+        "client_id": st.secrets["google"]["client_id"],
+        "project_id": st.secrets["google"]["project_id"],
+        "auth_uri": st.secrets["google"]["auth_uri"],
+        "token_uri": st.secrets["google"]["token_uri"],
+        "auth_provider_x509_cert_url": st.secrets["google"]["auth_provider_x509_cert_url"],
+        "client_secret": st.secrets["google"]["client_secret"],
+        "redirect_uris": ["http://localhost"]
+    }
+}
+
+flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+creds = flow.run_local_server(port=0)
 
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
