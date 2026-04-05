@@ -28,15 +28,15 @@ def get_calendar_service():
         with open(TOKEN_FILE, "w") as token:
             token.write(creds.to_json())
 
-    service = build("calendar", "v3", credentials=creds)
-    return service
+    return build("calendar", "v3", credentials=creds)
 
 
-def create_event(title, start_dt, end_dt):
+def create_event(title, start_dt, end_dt, description="", attendee_email="", add_meet=False):
     service = get_calendar_service()
 
     event_body = {
         "summary": title,
+        "description": description,
         "start": {
             "dateTime": start_dt.isoformat(),
             "timeZone": TIMEZONE,
@@ -47,7 +47,24 @@ def create_event(title, start_dt, end_dt):
         },
     }
 
-    event = service.events().insert(calendarId="primary", body=event_body).execute()
+    if attendee_email.strip():
+        event_body["attendees"] = [{"email": attendee_email.strip()}]
+
+    if add_meet:
+        event_body["conferenceData"] = {
+            "createRequest": {
+                "requestId": f"meet-{int(dt.datetime.now().timestamp())}",
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        }
+
+    event = service.events().insert(
+        calendarId="primary",
+        body=event_body,
+        sendUpdates="all",
+        conferenceDataVersion=1 if add_meet else 0,
+    ).execute()
+
     return event
 
 
@@ -56,13 +73,42 @@ st.title("My Calendar Assistant")
 title = st.text_input("Event Title", "Test Meeting")
 date = st.date_input("Date")
 time = st.time_input("Time", dt.time(15, 0))
-duration = st.number_input("Duration (minutes)", 30)
+duration = st.number_input("Duration (minutes)", min_value=5, value=30, step=5)
+attendee_email = st.text_input("Attendee Email (optional)", "")
+description = st.text_area("Meeting Details / Description", "")
+add_meet = st.checkbox("Add Google Meet link")
 
 if st.button("Create Event"):
     start_dt = dt.datetime.combine(date, time)
-    end_dt = start_dt + dt.timedelta(minutes=duration)
+    end_dt = start_dt + dt.timedelta(minutes=int(duration))
 
-    event = create_event(title, start_dt, end_dt)
+    try:
+        event = create_event(
+            title=title,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            description=description,
+            attendee_email=attendee_email,
+            add_meet=add_meet,
+        )
 
-    st.success("Event created!")
-    st.write(event.get("htmlLink"))
+        st.success("Event created successfully.")
+
+        st.subheader("Meeting Details")
+        st.write(f"**Title:** {event.get('summary', '')}")
+        st.write(f"**Start:** {event['start'].get('dateTime', '')}")
+        st.write(f"**End:** {event['end'].get('dateTime', '')}")
+
+        if attendee_email.strip():
+            st.write(f"**Invite sent to:** {attendee_email}")
+
+        st.write(f"**Description:** {event.get('description', '')}")
+
+        meet_link = event.get("hangoutLink")
+        if meet_link:
+            st.write(f"**Google Meet:** {meet_link}")
+
+        st.write(f"**Calendar Link:** {event.get('htmlLink')}")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
