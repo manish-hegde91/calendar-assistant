@@ -1,44 +1,79 @@
-import os
 import datetime as dt
-import streamlit as st
+import urllib.parse
 
+import requests
+import streamlit as st
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
-TOKEN_FILE = "token_calendar.json"
 TIMEZONE = "Asia/Kolkata"
 
 
+def get_google_auth_url():
+    params = {
+        "client_id": st.secrets["google"]["client_id"],
+        "redirect_uri": st.secrets["google"]["redirect_uri"],
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+    }
+    return "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+
+
+def exchange_code_for_token(code):
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "code": code,
+        "client_id": st.secrets["google"]["client_id"],
+        "client_secret": st.secrets["google"]["client_secret"],
+        "redirect_uri": st.secrets["google"]["redirect_uri"],
+        "grant_type": "authorization_code",
+    }
+    response = requests.post(token_url, data=data, timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
+def handle_oauth_callback():
+    query_params = st.query_params
+
+    if "code" in query_params and "google_token" not in st.session_state:
+        code = query_params["code"]
+
+        if isinstance(code, list):
+            code = code[0]
+
+        token_data = exchange_code_for_token(code)
+        st.session_state["google_token"] = token_data
+
+        st.query_params.clear()
+        st.rerun()
+
+
 def get_calendar_service():
-    creds = None
+    if "google_token" not in st.session_state:
+        auth_url = get_google_auth_url()
+        st.info("Please sign in with Google first.")
+        st.markdown(f"[Sign in with Google]({auth_url})")
+        st.stop()
 
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    token_data = st.session_state["google_token"]
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            client_config = {
-                "installed": {
-                    "client_id": st.secrets["google"]["client_id"],
-                    "project_id": st.secrets["google"]["project_id"],
-                    "auth_uri": st.secrets["google"]["auth_uri"],
-                    "token_uri": st.secrets["google"]["token_uri"],
-                    "auth_provider_x509_cert_url": st.secrets["google"]["auth_provider_x509_cert_url"],
-                    "client_secret": st.secrets["google"]["client_secret"],
-                    "redirect_uris": ["http://localhost"]
-                }
-            }
+    creds = Credentials(
+        token=token_data.get("access_token"),
+        refresh_token=token_data.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=st.secrets["google"]["client_id"],
+        client_secret=st.secrets["google"]["client_secret"],
+        scopes=SCOPES,
+    )
 
-            flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        with open(TOKEN_FILE, "w") as token:
-            token.write(creds.to_json())
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        st.session_state["google_token"]["access_token"] = creds.token
 
     return build("calendar", "v3", credentials=creds)
 
@@ -82,6 +117,8 @@ def create_event(title, start_dt, end_dt, description="", attendee_email="", add
 
 st.title("My Calendar Assistant")
 
+handle_oauth_callback()
+
 title = st.text_input("Event Title", "Test Meeting")
 date = st.date_input("Date")
 time = st.time_input("Time", dt.time(15, 0))
@@ -105,7 +142,6 @@ if st.button("Create Event"):
         )
 
         st.success("Event created successfully.")
-
         st.subheader("Meeting Details")
         st.write(f"**Title:** {event.get('summary', '')}")
         st.write(f"**Start:** {event['start'].get('dateTime', '')}")
@@ -120,7 +156,7 @@ if st.button("Create Event"):
         if meet_link:
             st.write(f"**Google Meet:** {meet_link}")
 
-        st.write(f"**Calendar Link:** {event.get('htmlLink')}")
+        st.write(f"**Calendar Link:** {event.get('htmlLink', '')}")
 
     except Exception as e:
         st.error(f"Error: {e}")
